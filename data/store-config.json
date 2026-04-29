@@ -1,0 +1,8 @@
+{
+  "storeName": "Fashion Store",
+  "supportHours": "Mon-Fri 9am-6pm",
+  "shippingPolicy": "We ship worldwide. Standard 5-7 days, Express 2-3 days. Free shipping on orders over 150 EUR.",
+  "returnPolicy": "30 day returns on all unworn items with original tags.",
+  "currency": "EUR",
+  "languages": ["English", "French", "Arabic"]
+}
