@@ -8,6 +8,7 @@ const env = {
   WHATSAPP_APP_SECRET: 'x',
   GEMINI_API_KEY: 'key',
   GEMINI_MODEL: 'gemini-2.0-flash',
+  DEMO_FORCE_FALLBACK: false,
   MANAGER_PHONE: '212700000001',
   PORT: 3000,
   NODE_ENV: 'test' as const,

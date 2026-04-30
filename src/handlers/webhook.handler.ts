@@ -77,6 +77,51 @@ const shouldForceEscalation = (messageText: string): boolean => {
   );
 };
 
+const categoryKeywordMap: Record<string, string> = {
+  jacket: 'Jackets',
+  jackets: 'Jackets',
+  shoe: 'Shoes',
+  shoes: 'Shoes',
+  sneaker: 'Sneakers',
+  sneakers: 'Sneakers',
+  hoodie: 'Hoodies',
+  hoodies: 'Hoodies',
+  pant: 'Pants',
+  pants: 'Pants',
+  dress: 'Dresses',
+  dresses: 'Dresses',
+  swimwear: 'Swimwear',
+  accessory: 'Accessories',
+  accessories: 'Accessories'
+};
+
+const genderKeywordMap: Record<string, string> = {
+  men: 'Men',
+  man: 'Men',
+  male: 'Men',
+  women: 'Women',
+  woman: 'Women',
+  female: 'Women',
+  kids: 'Kids',
+  kid: 'Kids',
+  child: 'Kids',
+  children: 'Kids',
+  boy: 'Kids',
+  girl: 'Kids'
+};
+
+const inferIntentFromText = (messageText: string): { category?: string; gender?: string } => {
+  const text = messageText.toLowerCase();
+  const category = Object.entries(categoryKeywordMap).find(([k]) => text.includes(k))?.[1];
+  const gender = Object.entries(genderKeywordMap).find(([k]) => text.includes(k))?.[1];
+  return { category, gender };
+};
+
+const selectRelevantProduct = (messageText: string, products: Product[]): Product | null => {
+  if (products.length > 0) return products[0];
+  return null;
+};
+
 const buildDeterministicFallbackReply = (
   messageText: string,
   products: Product[],
@@ -101,8 +146,9 @@ const buildDeterministicFallbackReply = (
     };
   }
 
-  if (products.length > 0) {
-    const top = products[0];
+  const { category, gender } = inferIntentFromText(messageText);
+  const top = selectRelevantProduct(messageText, products);
+  if (top) {
     const reply = `✨ ${top.name} is ${top.price} ${top.currency}, stock ${top.stock_quantity}. Colors: ${top.color_options.slice(0, 3).join(', ')}. Sizes: ${top.size_options.slice(0, 4).join(', ')}.`;
     return {
       intent: 'product_question',
@@ -112,9 +158,20 @@ const buildDeterministicFallbackReply = (
     };
   }
 
+  if (category || gender) {
+    const categoryPart = category ? `${category}` : 'items';
+    const genderPart = gender ? ` for ${gender.toLowerCase()}` : '';
+    return {
+      intent: 'product_question',
+      reply: `Yes 👍 We have ${categoryPart}${genderPart}. Tell me preferred color, size, and budget, and I’ll suggest the best options.`,
+      needs_escalation: false,
+      escalation_reason: ''
+    };
+  }
+
   return {
     intent: 'other',
-    reply: `Hi 👋 I can help with products, shipping, and returns. Shipping: ${storeConfig.shippingPolicy.slice(0, 120)}`,
+    reply: `Hi 👋 I can help you find products by category, color, size, and budget. You can also ask about shipping or returns.`,
     needs_escalation: false,
     escalation_reason: ''
   };
@@ -151,7 +208,9 @@ export const createWebhookHandlers = (deps: HandlerDeps) => {
       ]);
 
       const prompt = buildPrompt(storeConfig, products, parsed.messageText);
-      const aiResult = await deps.geminiService.generateReply(prompt);
+      const aiResult = deps.env.DEMO_FORCE_FALLBACK
+        ? { ok: false as const, error: 'Forced deterministic fallback mode' }
+        : await deps.geminiService.generateReply(prompt);
       const aiReply = aiResult.ok && aiResult.reply ? parseAiReply(aiResult.reply) : null;
       if (aiResult.ok && aiResult.reply && !aiReply) {
         deps.logger.warn(
@@ -176,8 +235,7 @@ export const createWebhookHandlers = (deps: HandlerDeps) => {
       const finalReply = shouldForceEscalation(parsed.messageText)
         ? fallbackEscalation('Customer explicitly requested human support')
         : aiReply ?? buildDeterministicFallbackReply(parsed.messageText, products, storeConfig);
-
-      await deps.whatsappService.sendMessage(parsed.phone, finalReply.reply);
+      const sentToCustomer = await deps.whatsappService.sendMessage(parsed.phone, finalReply.reply);
 
       if (finalReply.needs_escalation) {
         await deps.whatsappService.sendEscalationAlert({
@@ -186,6 +244,10 @@ export const createWebhookHandlers = (deps: HandlerDeps) => {
           message: parsed.messageText,
           reason: finalReply.escalation_reason || 'Manual follow-up required'
         });
+      }
+
+      if (!sentToCustomer) {
+        deps.logger.error({ phone: maskedPhone }, 'Final reply could not be delivered to customer');
       }
 
       // Fire-and-forget by design: read receipts should never delay customer responses.

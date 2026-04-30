@@ -7,6 +7,13 @@ const envSchema = z.object({
   WHATSAPP_APP_SECRET: z.string().min(1),
   GEMINI_API_KEY: z.string().min(1),
   GEMINI_MODEL: z.string().min(1).default('gemini-2.0-flash'),
+  DEMO_FORCE_FALLBACK: z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((value) =>
+      typeof value === 'boolean' ? value : value?.toLowerCase() === 'true'
+    )
+    .default(false),
   MANAGER_PHONE: z.string().min(8),
   PORT: z.coerce.number().int().positive().default(3000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
