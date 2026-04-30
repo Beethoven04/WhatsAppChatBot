@@ -9,14 +9,14 @@ import type { WhatsAppWebhookPayload } from '../types/whatsapp.types';
 import { parseIncomingMessage } from '../utils/messageParser';
 import { maskPhone } from '../utils/logger';
 import { parseAiReply } from '../utils/responseParser';
-import type { GeminiService } from '../services/gemini.service';
+import type { AiService } from '../services/ai.service';
 import type { WhatsAppService } from '../services/whatsapp.service';
 
 interface HandlerDeps {
   env: AppEnv;
   logger: FastifyBaseLogger;
   productRepository: ProductRepository;
-  geminiService: GeminiService;
+  aiService: AiService;
   whatsappService: WhatsAppService;
 }
 
@@ -36,7 +36,7 @@ const renderProducts = (products: Product[]): string => {
     .join('\n');
 };
 
-const buildPrompt = (store: StoreConfig, products: Product[], message: string): string => `You are a WhatsApp customer support agent for ${store.storeName}.
+const buildSystemPrompt = (store: StoreConfig, products: Product[]): string => `You are a WhatsApp customer support agent for ${store.storeName}.
 Answer ONLY using the product information and store policies provided.
 Never invent prices, stock levels, or product details.
 Be friendly and concise - this is WhatsApp, keep replies under 300 characters.
@@ -49,9 +49,6 @@ Support hours: ${store.supportHours}
 
 RELEVANT PRODUCTS:
 ${renderProducts(products)}
-
-Customer message:
-${message}
 
 Respond ONLY in this exact JSON format, no markdown, no extra text:
 {
@@ -207,10 +204,10 @@ export const createWebhookHandlers = (deps: HandlerDeps) => {
         deps.productRepository.search(parsed.messageText)
       ]);
 
-      const prompt = buildPrompt(storeConfig, products, parsed.messageText);
+      const systemPrompt = buildSystemPrompt(storeConfig, products);
       const aiResult = deps.env.DEMO_FORCE_FALLBACK
         ? { ok: false as const, error: 'Forced deterministic fallback mode' }
-        : await deps.geminiService.generateReply(prompt);
+        : await deps.aiService.generateReply(systemPrompt, parsed.messageText);
       const aiReply = aiResult.ok && aiResult.reply ? parseAiReply(aiResult.reply) : null;
       if (aiResult.ok && aiResult.reply && !aiReply) {
         deps.logger.warn(

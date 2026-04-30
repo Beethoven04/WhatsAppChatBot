@@ -1,4 +1,4 @@
-# WhatsApp Fashion Chatbot (Fastify + Gemini + Meta Cloud API)
+# WhatsApp Fashion Chatbot (Fastify + Groq + Meta Cloud API)
 
 Production-ready TypeScript WhatsApp chatbot for fashion e-commerce demos.
 
@@ -6,7 +6,7 @@ Production-ready TypeScript WhatsApp chatbot for fashion e-commerce demos.
 - Node.js 20+
 - TypeScript (strict)
 - Fastify
-- Google Gemini 2.0 Flash (REST)
+- Groq API (`llama-3.3-70b-versatile`)
 - Meta WhatsApp Cloud API
 - Zod validation
 - Pino logging
@@ -33,14 +33,21 @@ Required (validated at startup with Zod):
 - `WHATSAPP_PHONE_ID`
 - `WHATSAPP_VERIFY_TOKEN`
 - `WHATSAPP_APP_SECRET`
-- `GEMINI_API_KEY`
-- `GEMINI_MODEL` (default `gemini-2.0-flash`)
+- `GROQ_API_KEY`
+- `GROQ_MODEL` (default `llama-3.3-70b-versatile`)
+- `DEMO_FORCE_FALLBACK` (`true|false`, default `false`)
 - `MANAGER_PHONE`
 - `PORT` (default `3000`)
 - `NODE_ENV` (`development|test|production`)
 - `LOG_LEVEL`
 
 If any required variable is missing/invalid, server exits immediately.
+
+## Groq Setup
+1. Create account at [console.groq.com](https://console.groq.com).
+2. Generate an API key.
+3. Set `GROQ_API_KEY` in your `.env` / Railway variables.
+4. Free tier supports **14,400 requests/day** and does not require a credit card.
 
 ## Webhook Routes
 - `GET /` health check

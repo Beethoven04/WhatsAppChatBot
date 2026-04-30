@@ -7,7 +7,7 @@ export interface AiReply {
   escalation_reason: string;
 }
 
-export interface GeminiGenerateResult {
+export interface AiGenerateResult {
   ok: boolean;
   reply?: string;
   error?: string;

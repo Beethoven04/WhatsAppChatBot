@@ -5,7 +5,7 @@ import type { AppEnv } from './config/env';
 import { RATE_LIMIT_MAX, RATE_LIMIT_WINDOW } from './config/constants';
 import { createWebhookHandlers } from './handlers/webhook.handler';
 import { verifyMetaSignature } from './middleware/signature.middleware';
-import { GeminiService } from './services/gemini.service';
+import { AiService } from './services/ai.service';
 import { createProductRepository } from './services/product.service';
 import { WhatsAppService } from './services/whatsapp.service';
 import { createLoggerOptions } from './utils/logger';
@@ -25,14 +25,14 @@ export const buildApp = async (env: AppEnv) => {
   });
 
   const productRepository = createProductRepository();
-  const geminiService = new GeminiService(env);
+  const aiService = new AiService(env);
   const whatsappService = new WhatsAppService(env, app.log);
 
   const handlers = createWebhookHandlers({
     env,
     logger: app.log,
     productRepository,
-    geminiService,
+    aiService,
     whatsappService
   });
 
