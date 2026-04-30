@@ -70,6 +70,56 @@ const fallbackEscalation = (reason: string): AiReply => ({
   escalation_reason: reason
 });
 
+const shouldForceEscalation = (messageText: string): boolean => {
+  const text = messageText.toLowerCase();
+  return ['human', 'agent', 'manager', 'someone real', 'call me', 'support'].some((keyword) =>
+    text.includes(keyword)
+  );
+};
+
+const buildDeterministicFallbackReply = (
+  messageText: string,
+  products: Product[],
+  storeConfig: StoreConfig
+): AiReply => {
+  const lower = messageText.toLowerCase();
+  if (lower.includes('ship')) {
+    return {
+      intent: 'shipping',
+      reply: `🚚 ${storeConfig.shippingPolicy.slice(0, 260)}`,
+      needs_escalation: false,
+      escalation_reason: ''
+    };
+  }
+
+  if (lower.includes('return') || lower.includes('refund')) {
+    return {
+      intent: 'returns',
+      reply: `↩️ ${storeConfig.returnPolicy.slice(0, 260)}`,
+      needs_escalation: false,
+      escalation_reason: ''
+    };
+  }
+
+  if (products.length > 0) {
+    const top = products[0];
+    const reply = `✨ ${top.name} is ${top.price} ${top.currency}, stock ${top.stock_quantity}. Colors: ${top.color_options.slice(0, 3).join(', ')}. Sizes: ${top.size_options.slice(0, 4).join(', ')}.`;
+    return {
+      intent: 'product_question',
+      reply: reply.slice(0, 300),
+      needs_escalation: false,
+      escalation_reason: ''
+    };
+  }
+
+  return {
+    intent: 'other',
+    reply: `Hi 👋 I can help with products, shipping, and returns. Shipping: ${storeConfig.shippingPolicy.slice(0, 120)}`,
+    needs_escalation: false,
+    escalation_reason: ''
+  };
+};
+
 export const createWebhookHandlers = (deps: HandlerDeps) => {
   const getHealth = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     await reply.code(200).send({ status: 'ok', timestamp: new Date().toISOString(), version: APP_VERSION });
@@ -109,7 +159,7 @@ export const createWebhookHandlers = (deps: HandlerDeps) => {
             phone: maskedPhone,
             aiReplyPreview: aiResult.reply.slice(0, 300)
           },
-          'AI reply JSON parse failed; falling back to escalation'
+          'AI reply JSON parse failed; using deterministic fallback reply'
         );
       }
 
@@ -119,11 +169,13 @@ export const createWebhookHandlers = (deps: HandlerDeps) => {
             phone: maskedPhone,
             aiError: aiResult.error
           },
-          'AI generation failed; falling back to escalation'
+          'AI generation failed; using deterministic fallback reply'
         );
       }
 
-      const finalReply = aiReply ?? fallbackEscalation(aiResult.error ?? 'Invalid AI response');
+      const finalReply = shouldForceEscalation(parsed.messageText)
+        ? fallbackEscalation('Customer explicitly requested human support')
+        : aiReply ?? buildDeterministicFallbackReply(parsed.messageText, products, storeConfig);
 
       await deps.whatsappService.sendMessage(parsed.phone, finalReply.reply);
 
