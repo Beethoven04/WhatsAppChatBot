@@ -103,6 +103,26 @@ export const createWebhookHandlers = (deps: HandlerDeps) => {
       const prompt = buildPrompt(storeConfig, products, parsed.messageText);
       const aiResult = await deps.geminiService.generateReply(prompt);
       const aiReply = aiResult.ok && aiResult.reply ? parseAiReply(aiResult.reply) : null;
+      if (aiResult.ok && aiResult.reply && !aiReply) {
+        deps.logger.warn(
+          {
+            phone: maskedPhone,
+            aiReplyPreview: aiResult.reply.slice(0, 300)
+          },
+          'AI reply JSON parse failed; falling back to escalation'
+        );
+      }
+
+      if (!aiResult.ok) {
+        deps.logger.warn(
+          {
+            phone: maskedPhone,
+            aiError: aiResult.error
+          },
+          'AI generation failed; falling back to escalation'
+        );
+      }
+
       const finalReply = aiReply ?? fallbackEscalation(aiResult.error ?? 'Invalid AI response');
 
       await deps.whatsappService.sendMessage(parsed.phone, finalReply.reply);

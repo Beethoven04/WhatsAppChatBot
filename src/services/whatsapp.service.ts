@@ -25,7 +25,8 @@ export class WhatsAppService {
       });
 
       if (!response.ok) {
-        this.logger.error({ status: response.status, path }, 'WhatsApp API request failed');
+        const errorBody = await response.text().catch(() => 'Unable to read error body');
+        this.logger.error({ status: response.status, path, errorBody }, 'WhatsApp API request failed');
       }
     } catch (error) {
       this.logger.error({ error: error instanceof Error ? error.message : 'Unknown error', path }, 'WhatsApp API network error');
