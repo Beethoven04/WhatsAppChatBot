@@ -20,6 +20,15 @@ interface HandlerDeps {
   whatsappService: WhatsAppService;
 }
 
+interface ConversationContext {
+  lastProductId: string | null;
+  lastCandidates: string[];
+  updatedAt: number;
+}
+
+const contexts = new Map<string, ConversationContext>();
+const CONTEXT_TTL_MS = 1000 * 60 * 60;
+
 const readStoreConfig = async (): Promise<StoreConfig> => {
   const filePath = path.resolve(process.cwd(), 'data/store-config.json');
   const raw = await readFile(filePath, 'utf8');
@@ -31,7 +40,7 @@ const renderProducts = (products: Product[]): string => {
   return products
     .map(
       (p) =>
-        `- ${p.name} (${p.product_id}) | ${p.price} ${p.currency} | Stock: ${p.stock_quantity} | Category: ${p.category} | Colors: ${p.color_options.join(', ')} | Sizes: ${p.size_options.join(', ')}`
+        `- ${p.name} (${p.product_id}) | ${p.price} ${p.currency} | Stock: ${p.stock_quantity} | Category: ${p.category} | Material: ${p.material} | Description: ${p.description} | Colors: ${p.color_options.join(', ')} | Sizes: ${p.size_options.join(', ')}`
     )
     .join('\n');
 };
@@ -39,7 +48,8 @@ const renderProducts = (products: Product[]): string => {
 const buildSystemPrompt = (store: StoreConfig, products: Product[]): string => `You are a WhatsApp customer support agent for ${store.storeName}.
 Answer ONLY using the product information and store policies provided.
 Never invent prices, stock levels, or product details.
-Be friendly and concise - this is WhatsApp, keep replies under 300 characters.
+For follow-up questions like "description", "material", "size", "stock", use the first relevant product in the list.
+Be friendly and concise this is WhatsApp, keep replies under 300 characters.
 Use emojis naturally.
 
 STORE POLICIES:
@@ -77,6 +87,11 @@ const shouldForceEscalation = (messageText: string): boolean => {
 const categoryKeywordMap: Record<string, string> = {
   jacket: 'Jackets',
   jackets: 'Jackets',
+  blazer: 'Jackets',
+  blazers: 'Jackets',
+  jean: 'Pants',
+  jeans: 'Pants',
+  denim: 'Pants',
   shoe: 'Shoes',
   shoes: 'Shoes',
   sneaker: 'Sneakers',
@@ -107,6 +122,10 @@ const genderKeywordMap: Record<string, string> = {
   girl: 'Kids'
 };
 
+const stopWords = new Set([
+  'i', 'a', 'an', 'the', 'for', 'of', 'to', 'do', 'you', 'have', 'any', 'need', 'want', 'please', 'is', 'are', 'about', 'that', 'this'
+]);
+
 const inferIntentFromText = (messageText: string): { category?: string; gender?: string } => {
   const text = messageText.toLowerCase();
   const category = Object.entries(categoryKeywordMap).find(([k]) => text.includes(k))?.[1];
@@ -114,9 +133,90 @@ const inferIntentFromText = (messageText: string): { category?: string; gender?:
   return { category, gender };
 };
 
-const selectRelevantProduct = (messageText: string, products: Product[]): Product | null => {
-  if (products.length > 0) return products[0];
-  return null;
+const extractRequestedSize = (messageText: string): string | null => {
+  const normalized = messageText.toUpperCase();
+  const alpha = normalized.match(/\b(XXS|XS|S|M|L|XL|XXL|XXXL)\b/);
+  if (alpha) return alpha[1];
+  const numeric = normalized.match(/\b(\d{2})\b/);
+  return numeric?.[1] ?? null;
+};
+
+const isFollowUpQuestion = (messageText: string): boolean => {
+  const text = messageText.toLowerCase();
+  return [
+    'that product', 'this product', 'it', 'its', 'description', 'describe', 'material', 'quality',
+    'stock', 'still have', 'size', 'available size', 'available in'
+  ].some((key) => text.includes(key));
+};
+
+const tokenize = (text: string): string[] =>
+  text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token && !stopWords.has(token));
+
+const rankProducts = (messageText: string, products: Product[]): Product[] => {
+  const query = messageText.toLowerCase();
+  const tokens = tokenize(messageText);
+  const { category, gender } = inferIntentFromText(messageText);
+  const requestedSize = extractRequestedSize(messageText);
+
+  const scored = products.map((product) => {
+    const hayName = product.name.toLowerCase();
+    const hayCategory = product.category.toLowerCase();
+    const hayDescription = product.description.toLowerCase();
+    const hayMaterial = product.material.toLowerCase();
+    const hayStyles = product.style_tags.join(' ').toLowerCase();
+    const hayGender = product.gender.toLowerCase();
+
+    let score = 0;
+
+    if (query && hayName.includes(query)) score += 100;
+    if (query && `${product.name} ${product.category}`.toLowerCase().includes(query)) score += 60;
+
+    for (const token of tokens) {
+      if (hayName.includes(token)) score += 12;
+      if (hayCategory.includes(token)) score += 8;
+      if (hayMaterial.includes(token)) score += 6;
+      if (hayStyles.includes(token)) score += 5;
+      if (hayDescription.includes(token)) score += 3;
+      if (hayGender.includes(token)) score += 5;
+      if (product.color_options.some((c) => c.toLowerCase().includes(token))) score += 4;
+      if (product.size_options.some((s) => s.toLowerCase() === token)) score += 8;
+    }
+
+    if (category && hayCategory.includes(category.toLowerCase())) score += 22;
+    if (gender && hayGender.includes(gender.toLowerCase())) score += 18;
+    if (requestedSize && product.size_options.map((s) => s.toUpperCase()).includes(requestedSize)) score += 16;
+
+    return { product, score };
+  });
+
+  return scored
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.product)
+    .slice(0, 8);
+};
+
+const getContext = (phone: string): ConversationContext | null => {
+  const context = contexts.get(phone);
+  if (!context) return null;
+  if (Date.now() - context.updatedAt > CONTEXT_TTL_MS) {
+    contexts.delete(phone);
+    return null;
+  }
+  return context;
+};
+
+const setContext = (phone: string, products: Product[]): void => {
+  if (!products.length) return;
+  contexts.set(phone, {
+    lastProductId: products[0].product_id,
+    lastCandidates: products.map((p) => p.product_id),
+    updatedAt: Date.now()
+  });
 };
 
 const buildDeterministicFallbackReply = (
@@ -125,6 +225,8 @@ const buildDeterministicFallbackReply = (
   storeConfig: StoreConfig
 ): AiReply => {
   const lower = messageText.toLowerCase();
+  const requestedSize = extractRequestedSize(messageText);
+
   if (lower.includes('ship')) {
     return {
       intent: 'shipping',
@@ -143,24 +245,66 @@ const buildDeterministicFallbackReply = (
     };
   }
 
-  const { category, gender } = inferIntentFromText(messageText);
-  const top = selectRelevantProduct(messageText, products);
+  const top = products[0];
   if (top) {
-    const reply = `✨ ${top.name} is ${top.price} ${top.currency}, stock ${top.stock_quantity}. Colors: ${top.color_options.slice(0, 3).join(', ')}. Sizes: ${top.size_options.slice(0, 4).join(', ')}.`;
+    if (lower.includes('description') || lower.includes('describe')) {
+      return {
+        intent: 'product_question',
+        reply: `🧾 ${top.name}: ${top.description}`.slice(0, 300),
+        needs_escalation: false,
+        escalation_reason: ''
+      };
+    }
+
+    if (lower.includes('material') || lower.includes('quality')) {
+      return {
+        intent: 'product_question',
+        reply: `🧵 ${top.name} material: ${top.material}. Care: ${top.care_instructions}`.slice(0, 300),
+        needs_escalation: false,
+        escalation_reason: ''
+      };
+    }
+
+    if (lower.includes('size') && requestedSize) {
+      const hasSize = top.size_options.map((s) => s.toUpperCase()).includes(requestedSize);
+      return {
+        intent: 'product_question',
+        reply: hasSize
+          ? `✅ Yes, ${top.name} is available in size ${requestedSize}.`
+          : `❌ ${top.name} is not available in size ${requestedSize}. Available sizes: ${top.size_options.join(', ')}`,
+        needs_escalation: false,
+        escalation_reason: ''
+      };
+    }
+
+    if (lower.includes('jean') || lower.includes('jeans')) {
+      const jeanResults = products.slice(0, 4);
+      if (jeanResults.length > 0) {
+        const list = jeanResults.map((p) => `${p.name} (${p.price} ${p.currency})`).join('; ');
+        return {
+          intent: 'product_question',
+          reply: `👖 Available jeans: ${list}. Tell me your gender and preferred size for best match.`.slice(0, 300),
+          needs_escalation: false,
+          escalation_reason: ''
+        };
+      }
+    }
+
     return {
       intent: 'product_question',
-      reply: reply.slice(0, 300),
+      reply: `✨ ${top.name} is ${top.price} ${top.currency}, stock ${top.stock_quantity}. Colors: ${top.color_options.slice(0, 3).join(', ')}. Sizes: ${top.size_options.slice(0, 4).join(', ')}.`.slice(0, 300),
       needs_escalation: false,
       escalation_reason: ''
     };
   }
 
+  const { category, gender } = inferIntentFromText(messageText);
   if (category || gender) {
     const categoryPart = category ? `${category}` : 'items';
     const genderPart = gender ? ` for ${gender.toLowerCase()}` : '';
     return {
       intent: 'product_question',
-      reply: `Yes 👍 We have ${categoryPart}${genderPart}. Tell me preferred color, size, and budget, and I’ll suggest the best options.`,
+      reply: `Yes 👍 We have ${categoryPart}${genderPart}. Share preferred size and color and I will suggest exact options.`,
       needs_escalation: false,
       escalation_reason: ''
     };
@@ -168,7 +312,7 @@ const buildDeterministicFallbackReply = (
 
   return {
     intent: 'other',
-    reply: `Hi 👋 I can help you find products by category, color, size, and budget. You can also ask about shipping or returns.`,
+    reply: 'Hi 👋 I can help you find products by name, size, gender, color, and budget. Ask me anything about a specific item.',
     needs_escalation: false,
     escalation_reason: ''
   };
@@ -199,16 +343,33 @@ export const createWebhookHandlers = (deps: HandlerDeps) => {
     const maskedPhone = maskPhone(parsed.phone);
 
     try {
-      const [storeConfig, products] = await Promise.all([
+      // Best-effort typing UX while AI/search is processing.
+      void deps.whatsappService.showTypingIndicator(parsed.messageId);
+
+      const [storeConfig, allProducts] = await Promise.all([
         readStoreConfig(),
-        deps.productRepository.search(parsed.messageText)
+        deps.productRepository.getAll()
       ]);
+
+      const context = getContext(parsed.phone);
+      const followUp = isFollowUpQuestion(parsed.messageText);
+
+      let products = rankProducts(parsed.messageText, allProducts);
+      if (followUp && context?.lastProductId) {
+        const previous = allProducts.find((p) => p.product_id === context.lastProductId);
+        if (previous) {
+          products = [previous, ...products.filter((p) => p.product_id !== previous.product_id)].slice(0, 8);
+        }
+      }
+
+      setContext(parsed.phone, products);
 
       const systemPrompt = buildSystemPrompt(storeConfig, products);
       const aiResult = deps.env.DEMO_FORCE_FALLBACK
         ? { ok: false as const, error: 'Forced deterministic fallback mode' }
         : await deps.aiService.generateReply(systemPrompt, parsed.messageText);
       const aiReply = aiResult.ok && aiResult.reply ? parseAiReply(aiResult.reply) : null;
+
       if (aiResult.ok && aiResult.reply && !aiReply) {
         deps.logger.warn(
           {
@@ -232,6 +393,7 @@ export const createWebhookHandlers = (deps: HandlerDeps) => {
       const finalReply = shouldForceEscalation(parsed.messageText)
         ? fallbackEscalation('Customer explicitly requested human support')
         : aiReply ?? buildDeterministicFallbackReply(parsed.messageText, products, storeConfig);
+
       const sentToCustomer = await deps.whatsappService.sendMessage(parsed.phone, finalReply.reply);
 
       if (finalReply.needs_escalation) {

@@ -73,4 +73,19 @@ export class WhatsAppService {
       message_id: messageId
     });
   }
+
+  /**
+   * Best-effort typing indicator for improved UX while processing responses.
+   * If unsupported by a given API version/account, this fails silently.
+   */
+  public async showTypingIndicator(messageId: string): Promise<void> {
+    await this.post('messages', {
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+      typing_indicator: {
+        type: 'text'
+      }
+    });
+  }
 }
